@@ -19,6 +19,11 @@ struct install_info
 	//原 基礎服務提供者 dll 全路徑
 	std::wstring path;
 };
+struct PackedCatalogItem
+{
+	char Path[MAX_PATH];
+	WSAPROTOCOL_INFO Info;
+};
 //註冊表 安裝 卸載 封裝
 class install_t
 {
@@ -41,11 +46,6 @@ private:
 				RegCloseKey(_key);
 			}
 		}
-	};
-	struct PackedCatalogItem
-	{
-		char Path[MAX_PATH];
-		WSAPROTOCOL_INFO Info;
 	};
 	//返回 原 基礎服務 提供者 key 和 PackedCatalogItem
 	static void basic_provider(std::wstring& name,PackedCatalogItem& item)

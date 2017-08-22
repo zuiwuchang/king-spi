@@ -10,7 +10,7 @@
 #include <stdio.h>
 #include <tchar.h>
 #include <iostream>
-
+#include <vector>
 
 #include <WinSock2.h>
 
@@ -20,6 +20,7 @@
 #include <boost/exception/all.hpp>
 #include <boost/noncopyable.hpp>
 #include <boost/filesystem.hpp>
+#include <boost/foreach.hpp>
 #define CREATE_CATEGORY(Category,NAME) class Category:public boost::system::error_category{public:\
 	typedef Category type_t;\
 	private:\

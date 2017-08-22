@@ -24,6 +24,16 @@ struct PackedCatalogItem
 	char Path[MAX_PATH];
 	WSAPROTOCOL_INFO Info;
 };
+struct packed_catalog_item_t
+{
+	//在註冊表中的 key值
+	std::wstring key;
+
+	//PackedCatalogItem 值
+	PackedCatalogItem item;
+};
+typedef boost::shared_ptr<packed_catalog_item_t> packed_catalog_item_spt;
+typedef std::vector<packed_catalog_item_spt> packed_catalog_items_t;
 //註冊表 安裝 卸載 封裝
 class install_t
 {
@@ -48,29 +58,39 @@ private:
 		}
 	};
 	//返回 原 基礎服務 提供者 key 和 PackedCatalogItem
-	static void basic_provider(std::wstring& name,PackedCatalogItem& item)
+	static void basic_provider(packed_catalog_items_t& items)
 	{
-		HKEY key;
-		if(ERROR_SUCCESS != RegOpenKeyEx(HKEY_LOCAL_MACHINE,KING_CATALOG_KEY,0,KEY_READ,&key))
+		try
 		{
-			BOOST_THROW_EXCEPTION(boost::system::system_error(1,install::get("bad open catalog key")));
-		}
-		scoped_hkey lKey(key);
-
-		//enum
-		DWORD pos = 0;
-		wchar_t keyName[MAX_PATH];
-		while(RegEnumKey(key,pos,keyName, MAX_PATH) == ERROR_SUCCESS)
-		{
-			if(basic_provider(key,keyName,item))
+			HKEY key;
+			if(ERROR_SUCCESS != RegOpenKeyEx(HKEY_LOCAL_MACHINE,KING_CATALOG_KEY,0,KEY_READ,&key))
 			{
-				name = keyName;
-				return;
+				BOOST_THROW_EXCEPTION(boost::system::system_error(1,install::get("bad open catalog key")));
 			}
-			pos++;
-		}
+			scoped_hkey lKey(key);
 
-		BOOST_THROW_EXCEPTION(boost::system::system_error(1,install::get("bad find basic_provider")));
+			//enum
+			DWORD pos = 0;
+			wchar_t keyName[MAX_PATH];
+			while(RegEnumKey(key,pos,keyName, MAX_PATH) == ERROR_SUCCESS)
+			{
+				packed_catalog_item_spt item = boost::make_shared<packed_catalog_item_t>();
+				if(basic_provider(key,keyName,item->item))
+				{
+					item->key = keyName;
+					items.push_back(item);
+				}
+				pos++;
+			}
+			if(items.empty())
+			{
+				BOOST_THROW_EXCEPTION(boost::system::system_error(1,install::get("bad find basic_provider")));
+			}
+		}
+		catch(const std::bad_alloc&)
+		{
+			BOOST_THROW_EXCEPTION(boost::system::system_error(1,install::get("bad alloc")));
+		}
 	}
 	static bool basic_provider(HKEY key,wchar_t* keyName,PackedCatalogItem& item)
 	{
@@ -90,14 +110,14 @@ private:
 		WSAPROTOCOL_INFO& info = item.Info;
 		if(info.ProtocolChain.ChainLen != 1 //基礎服務提供者
 			|| info.iAddressFamily != AF_INET	//驗證 ip 
-			|| info.iSocketType != SOCK_STREAM	//tcp
+			//|| info.iSocketType != SOCK_STREAM	//tcp
 			)
 		{
 			return false;
 		}
 		return true;
 	}
-	static void replace_spi(const std::wstring& name,PackedCatalogItem& item)
+	static void replace_spi(packed_catalog_items_t& items)
 	{
 		char fileName[MAX_PATH];
 		GetModuleFileNameA(NULL,fileName,MAX_PATH);
@@ -112,19 +132,33 @@ private:
 
 		std::string str = path.string();
 
-		std::wstring keyName(KING_CATALOG_KEY);
-		keyName += L"\\" + name;
-		HKEY key;
-		if(ERROR_SUCCESS != RegOpenKeyEx(HKEY_LOCAL_MACHINE,keyName.c_str(),0,KEY_WRITE,&key))
+		try
 		{
-			BOOST_THROW_EXCEPTION(boost::system::system_error(1,install::get("bad open provider item")));
-		}
-		scoped_hkey lKey(key);
+			BOOST_FOREACH(const packed_catalog_item_spt& node,items)
+			{
+				std::wstring keyName(KING_CATALOG_KEY);
+				keyName += L"\\" + node->key;
+				HKEY key;
+				if(ERROR_SUCCESS != RegOpenKeyEx(HKEY_LOCAL_MACHINE,keyName.c_str(),0,KEY_WRITE,&key))
+				{
+					RegCloseKey(key);
+					BOOST_THROW_EXCEPTION(boost::system::system_error(1,install::get("bad open provider item")));
+				}
 
-		strcpy(item.Path,str.c_str());
-		if(ERROR_SUCCESS != RegSetValueEx(key,KING_CATALOG_ITEM,0,REG_BINARY,(const BYTE*)&item,sizeof(item)))
+				strcpy(node->item.Path,str.c_str());
+				if(ERROR_SUCCESS != RegSetValueEx(key,KING_CATALOG_ITEM,0,REG_BINARY,(const BYTE*)&(node->item),sizeof(PackedCatalogItem)))
+				{
+					RegCloseKey(key);
+					BOOST_THROW_EXCEPTION(boost::system::system_error(1,install::get("bad replace provider item")));
+				}
+
+				RegCloseKey(key);
+			}
+		}
+		catch(const boost::system::system_error& e)
 		{
-			BOOST_THROW_EXCEPTION(boost::system::system_error(1,install::get("bad replace provider item")));
+			uninstall();
+			BOOST_THROW_EXCEPTION(e);
 		}
 	}
 public:
@@ -135,9 +169,8 @@ public:
 		uninstall();
 
 		//返回 原 服務 提供者
-		std::wstring name;
-		PackedCatalogItem item;
-		basic_provider(name,item);
+		packed_catalog_items_t items;
+		basic_provider(items);
 
 		//創建 安裝 記錄信息
 		HKEY key;
@@ -157,83 +190,104 @@ public:
 		}
 		scoped_hkey lKey(key);
 
-		//save name
-		if(ERROR_SUCCESS != RegSetValueEx(key,KING_INSTALL_NAME,0,REG_SZ,(const BYTE*)name.c_str(),name.size() * sizeof(wchar_t)))
+		BOOST_FOREACH(const packed_catalog_item_spt& node,items)
 		{
-			BOOST_THROW_EXCEPTION(boost::system::system_error(1,install::get("bad save install name")));
-		}
+			const std::wstring& name = node->key;
+			const PackedCatalogItem& item = node->item;
 
-		//save item
-		if(ERROR_SUCCESS != RegSetValueEx(key,KING_INSTALL_ITEM,0,REG_BINARY,(const BYTE*)&item,sizeof(item)))
-		{
-			BOOST_THROW_EXCEPTION(boost::system::system_error(1,install::get("bad save install path")));
+			//save item
+			if(ERROR_SUCCESS != RegSetValueEx(key,name.c_str(),0,REG_BINARY,(const BYTE*)&item,sizeof(item)))
+			{
+				BOOST_THROW_EXCEPTION(boost::system::system_error(1,install::get("bad save install path")));
+			}
 		}
 
 		//替換 原始 spi dll
-		replace_spi(name,item);
+		replace_spi(items);
 	}
 	//卸載
 	static void uninstall()
 	{
 		//沒有安裝 直接 返回
-		std::wstring name;
-		PackedCatalogItem item;
-		if(!is_install(name,item))
+		packed_catalog_items_t items;
+		if(!is_install(items,false))
 		{
 			return;
 		}
-		std::string path = item.Path;
-		if(name.empty() || path.empty())
+		
+		BOOST_FOREACH(const packed_catalog_item_spt& node,items)
 		{
-			BOOST_THROW_EXCEPTION(boost::system::system_error(1,install::get("bad install record")));
-		}
+			
+			std::string path = node->item.Path;
+			if(path.empty())
+			{
+				BOOST_THROW_EXCEPTION(boost::system::system_error(1,install::get("bad install record")));
+			}
 
-		//打開 原key
-		std::wstring keyName = KING_CATALOG_KEY;
-		keyName += L"\\";
-		keyName += name;
-		HKEY key;
-		if(ERROR_SUCCESS != RegOpenKeyEx(HKEY_LOCAL_MACHINE,keyName.c_str(),0,KEY_ALL_ACCESS,&key))
-		{
-			BOOST_THROW_EXCEPTION(boost::system::system_error(1,install::get("bad open provider key")));
-		}
-		scoped_hkey lKey(key);
+			//打開 原key
+			std::wstring keyName = KING_CATALOG_KEY;
+			keyName += L"\\" + node->key;
+			HKEY key;
+			if(ERROR_SUCCESS != RegOpenKeyEx(HKEY_LOCAL_MACHINE,keyName.c_str(),0,KEY_ALL_ACCESS,&key))
+			{
+				BOOST_THROW_EXCEPTION(boost::system::system_error(1,install::get("bad open provider key")));
+			}
+			scoped_hkey lKey(key);
 
-		//恢復 key值
-		DWORD len = sizeof(item);
-		if(ERROR_SUCCESS != RegSetValueEx(key,KING_CATALOG_ITEM,0,REG_BINARY,(const BYTE*)&item,sizeof(item)))
-		{
-			BOOST_THROW_EXCEPTION(boost::system::system_error(1,install::get("bad save provider item")));
+			//恢復 key值
+			if(ERROR_SUCCESS != RegSetValueEx(key,KING_CATALOG_ITEM,0,REG_BINARY,(const BYTE*)&(node->item),sizeof(PackedCatalogItem)))
+			{
+				BOOST_THROW_EXCEPTION(boost::system::system_error(1,install::get("bad save provider item")));
+			}
 		}
-
 		//刪除 安裝 記錄
 		RegDeleteKey(HKEY_LOCAL_MACHINE,KING_INSTALL_KEY);
 	}
 	//返回 是否已經 安裝
-	static bool is_install(std::wstring& name,PackedCatalogItem& item)
+	static bool is_install(packed_catalog_items_t& items,bool one = true)
 	{
+		bool ok = false;
 		HKEY key;
 		if(ERROR_SUCCESS != RegOpenKeyEx(HKEY_LOCAL_MACHINE,KING_INSTALL_KEY,0,KEY_READ,&key))
 		{
-			return false;
+			return ok;
 		}
 		scoped_hkey lKey(key);
-
-		wchar_t cName[MAX_PATH];
-		DWORD len = sizeof(wchar_t) * MAX_PATH;
-		if(ERROR_SUCCESS != RegQueryValueEx(key,KING_INSTALL_NAME,0,NULL,(LPBYTE)cName,&len))
+		try
 		{
-			BOOST_THROW_EXCEPTION(boost::system::system_error(1,install::get("bad query install name")));
+			//enum
+			DWORD pos = 0;
+			wchar_t keyName[MAX_PATH];
+			while(true)
+			{
+				packed_catalog_item_spt item = boost::make_shared<packed_catalog_item_t>();
+				DWORD len = MAX_PATH;
+				DWORD type;
+				DWORD size = sizeof(PackedCatalogItem);
+				if(RegEnumValue(key,pos,keyName, &len,0,&type,(LPBYTE)&(item->item),&size) != ERROR_SUCCESS)
+				{
+					break;
+				}
+				if(type == REG_BINARY 
+					&& sizeof(PackedCatalogItem) == size
+					)
+				{
+					item->key = keyName;
+					items.push_back(item);
+					if(one)
+					{
+						break;
+					}
+				}
+				pos++;
+			}
+			ok = !items.empty();
 		}
-
-		len = sizeof(item);
-		if(ERROR_SUCCESS != RegQueryValueEx(key,KING_INSTALL_ITEM,0,NULL,(LPBYTE)&item,&len))
+		catch(const std::bad_alloc&)
 		{
-			BOOST_THROW_EXCEPTION(boost::system::system_error(1,install::get("bad query install item")));
+			BOOST_THROW_EXCEPTION(boost::system::system_error(1,install::get("bad alloc")));
 		}
-
-		name = cName;
-		return true;
+		return ok;
 	}
 
 };

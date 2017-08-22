@@ -3,6 +3,7 @@
 
 #include "stdafx.h"
 #include "king-spi.h"
+#include "log.h"
 
 //全局變量 保存 系統 原服務提供者的 實現
 WSPPROC_TABLE ProcTable;
@@ -15,25 +16,19 @@ int WSPAPI WSPStartup(
 	__out  LPWSPPROC_TABLE lpProcTable
 )
 {
-	std::ofstream f("c:/log.txt",std::ios::binary | std::ios::app | std::ios::out);
-	if(f.is_open())
-	{
-		std::string str = "WSPStartup\r\n";
-		f.write(str.data(),str.size());
-	}
+	write_log("WSPStartup begin");
 
 	try
 	{
-		std::wstring wcs;
-		PackedCatalogItem item;
+		packed_catalog_items_t items;
 		//沒有 安裝信息
-		if(!install_t::is_install(wcs,item))
+		if(!install_t::is_install(items))
 		{
 			return WSAEPROVIDERFAILEDINIT;
 		}
 		//將 %XXX% 環境變量 解析到路徑
 		char path[MAX_PATH] = {0};
-		if(!ExpandEnvironmentStringsA(item.Path, path, MAX_PATH))
+		if(!ExpandEnvironmentStringsA(items[0]->item.Path, path, MAX_PATH))
 		{
 			return WSAEPROVIDERFAILEDINIT;
 		}
@@ -65,6 +60,8 @@ int WSPAPI WSPStartup(
 		//要攔截的 實現
 		lpProcTable->lpWSPSocket = WSPSocket;
 		lpProcTable->lpWSPAccept = WSPAccept;
+
+		write_log("WSPStartup success");
 	}
 	catch(const boost::system::system_error&)
 	{
@@ -82,12 +79,7 @@ SOCKET WSPAPI WSPSocket(
   __out  LPINT lpErrno
 )
 {
-	std::ofstream f("c:/log.txt",std::ios::binary | std::ios::app | std::ios::out);
-	if(f.is_open())
-	{
-		std::string str = "WSPSocket\r\n";
-		f.write(str.data(),str.size());
-	}
+	write_log("WSPSocket");
 	return ProcTable.lpWSPSocket(af
 		,type
 		,protocol
@@ -105,11 +97,6 @@ SOCKET WSPAPI WSPAccept(
   __out    LPINT lpErrno
 )
 {
-	std::ofstream f("c:/log.txt",std::ios::binary | std::ios::app | std::ios::out);
-	if(f.is_open())
-	{
-		std::string str = "WSPAccept\r\n";
-		f.write(str.data(),str.size());
-	}
+	write_log("WSPAccept");
 	return ProcTable.lpWSPAccept(s,addr,addrlen,lpfnCondition,dwCallbackData,lpErrno);
 }

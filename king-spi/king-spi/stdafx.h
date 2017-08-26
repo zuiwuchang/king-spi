@@ -54,5 +54,9 @@
 };
 
 #include <kg/windows/utf.hpp>
+#define KG_DEBUG_USE_DEBUG
+#include <kg/debug.hpp>
 
 #include "../../king-spi-install/king-spi-install/install.hpp"
+
+
